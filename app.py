@@ -1,11 +1,11 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-import os
 from openai import OpenAI
+import os
 
-# --------- OPENAI SETUP ---------
-# Replace with your actual API key string from OpenAI dashboard
+# ------------------ OPENAI SETUP ------------------
+# Replace with your actual OpenAI API key
 os.environ["OPENAI_API_KEY"] = "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"
 client = OpenAI()
 
@@ -19,12 +19,13 @@ def translate_text(text, target_language):
         return response.choices[0].message.content.strip()
     except Exception as e:
         st.error(f"Translation failed: {e}")
-        return ""
+        return ""  # fallback empty string
 
-# --------- DATABASE SETUP ---------
+# ------------------ DATABASE SETUP ------------------
 conn = sqlite3.connect('lessons.db', check_same_thread=False)
 c = conn.cursor()
 
+# Create tables
 c.execute('''CREATE TABLE IF NOT EXISTS users
              (id INTEGER PRIMARY KEY AUTOINCREMENT,
              name TEXT, email TEXT UNIQUE, password TEXT, preferred_language TEXT)''')
@@ -41,18 +42,19 @@ c.execute('''CREATE TABLE IF NOT EXISTS progress
 
 conn.commit()
 
-# --------- SESSION ---------
+# ------------------ SESSION ------------------
 if "user" not in st.session_state:
     st.session_state.user = None
 
-# --------- FUNCTIONS ---------
+# ------------------ HELPER FUNCTIONS ------------------
 def register_user(name, email, password, preferred_language="en"):
     try:
         c.execute('INSERT INTO users (name, email, password, preferred_language) VALUES (?, ?, ?, ?)',
                   (name, email, password, preferred_language))
         conn.commit()
         return True
-    except:
+    except Exception as e:
+        st.error(f"Registration failed: {e}")
         return False
 
 def login_user(email, password):
@@ -60,9 +62,14 @@ def login_user(email, password):
     return c.fetchone()
 
 def add_lesson(title, en, es, fr):
-    c.execute('INSERT INTO lessons (title, content_en, content_es, content_fr) VALUES (?, ?, ?, ?)',
-              (title, en, es, fr))
-    conn.commit()
+    try:
+        c.execute('INSERT INTO lessons (title, content_en, content_es, content_fr) VALUES (?, ?, ?, ?)',
+                  (title, en, es, fr))
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Failed to add lesson: {e}")
+        return False
 
 def get_lessons():
     c.execute('SELECT * FROM lessons')
@@ -95,27 +102,26 @@ def is_read(user_id, lesson_id):
               (user_id, lesson_id))
     return c.fetchone() is not None
 
-# preload data
+# Preload sample lessons
 preload_lessons()
 
-# --------- UI ---------
+# ------------------ STREAMLIT UI ------------------
 st.title("🌐 3 Language Barrier – AI Learning App")
 
 menu = ["Home", "Register", "Login"]
 choice = st.sidebar.selectbox("Menu", menu)
 
-# --------- HOME ---------
+# ------------------ HOME ------------------
 if choice == "Home":
     st.subheader("📚 Available Lessons")
     lessons = get_lessons()
-
     if lessons:
         df = pd.DataFrame(lessons, columns=["ID","Title","English","Spanish","French"])
         st.dataframe(df[["Title","English","Spanish","French"]])
     else:
         st.info("No lessons available.")
 
-# --------- REGISTER ---------
+# ------------------ REGISTER ------------------
 elif choice == "Register":
     st.subheader("📝 Register")
     name = st.text_input("Name")
@@ -125,11 +131,11 @@ elif choice == "Register":
 
     if st.button("Register"):
         if register_user(name, email, password, lang):
-            st.success("✅ Account created!")
+            st.success("✅ Account created! Please login.")
         else:
-            st.error("❌ User already exists")
+            st.error("❌ Registration failed.")
 
-# --------- LOGIN ---------
+# ------------------ LOGIN ------------------
 elif choice == "Login":
     st.subheader("🔐 Login")
     email = st.text_input("Email")
@@ -141,11 +147,14 @@ elif choice == "Login":
             st.session_state.user = user
             st.success(f"Welcome {user[1]}!")
         else:
-            st.error("Invalid credentials")
+            st.error("Invalid credentials.")
 
+    # ------------------ USER DASHBOARD ------------------
     if st.session_state.user:
         user = st.session_state.user
         user_id = user[0]
+        preferred_lang = user[4]  # en, es, fr
+        user_lang_map = {"en": "English", "es": "Spanish", "fr": "French"}
 
         # --------- ADD LESSON ---------
         st.subheader("➕ Add New Lesson")
@@ -153,51 +162,45 @@ elif choice == "Login":
         with st.form("lesson_form", clear_on_submit=True):
             title = st.text_input("Lesson Title")
             content_en = st.text_area("Content (English)")
-
             auto_translate = st.checkbox("🌍 Auto-translate")
-
             content_es = st.text_area("Content (Spanish)")
             content_fr = st.text_area("Content (French)")
-
             submitted = st.form_submit_button("Add Lesson")
 
             if submitted:
                 if title and content_en:
-
                     if auto_translate:
                         with st.spinner("🤖 Translating..."):
                             content_es = translate_text(content_en, "Spanish")
                             content_fr = translate_text(content_en, "French")
-
-                    add_lesson(title, content_en, content_es, content_fr)
-
-                    st.success("✅ Lesson added!")
-                    st.experimental_rerun()
-
+                    success = add_lesson(title, content_en, content_es, content_fr)
+                    if success:
+                        st.success("✅ Lesson added!")
+                        st.experimental_rerun()
+                    else:
+                        st.error("❌ Failed to add lesson.")
                 else:
-                    st.warning("⚠️ Title & English required")
+                    st.warning("⚠️ Title & English content required!")
 
-        # --------- VIEW LESSONS ---------
+        # --------- VIEW LESSONS WITH AUTO LANGUAGE ---------
         st.subheader("📖 Learn")
-
         lessons = get_lessons()
-
         for lesson in lessons:
             lesson_id, title, en, es, fr = lesson
-
             st.markdown(f"### 📘 {title}")
 
-            lang = st.selectbox("Language", ["English","Spanish","French"], key=f"lang_{lesson_id}")
-
-            if lang == "English":
-                st.write(en)
-            elif lang == "Spanish":
-                st.write(es)
-            else:
-                st.write(fr)
-
+            # Auto-select preferred language
+            lang = st.selectbox(
+                "Language",
+                ["English","Spanish","French"],
+                index=["English","Spanish","French"].index(user_lang_map.get(preferred_lang, "English")),
+                key=f"lang_{lesson_id}"
+            )
+            content = {"English": en, "Spanish": es, "French": fr}[lang]
+            st.write(content)
             st.caption("🤖 AI supported translations")
 
+            # Progress buttons
             if is_read(user_id, lesson_id):
                 st.success("✅ Completed")
                 if st.button(f"Mark Unread {lesson_id}", key=f"unread_{lesson_id}"):
@@ -211,10 +214,9 @@ elif choice == "Login":
 
             st.write("---")
 
-        # --------- PROGRESS ---------
+        # --------- PROGRESS ----------------
         total = len(lessons)
         done = sum([1 for l in lessons if is_read(user_id, l[0])])
-
         st.subheader("📊 Progress")
         st.progress(done/total if total else 0)
         st.write(f"{done}/{total} lessons completed")
